@@ -108,12 +108,12 @@ static int get_kernel_series(const char *version, char *out, size_t len) {
 int robustness_check_phase1(robustness_result_t *result) {
   memset(result, 0, sizeof(*result));
 
-  /* 读取 /proc/version */
+  /* 读取 /proc/version (SELinux 可能拒绝，跳过版本校验但继续 kallsyms 查找) */
   int fd = open("/proc/version", O_RDONLY | O_CLOEXEC);
   if (fd < 0) {
-    pr_warning("robustness: cannot open /proc/version\n");
-    result->overall_pass = 1; /* 无法检查，允许继续 */
-    return 0;
+    pr_warning("robustness: cannot open /proc/version (SELinux?)\n");
+    pr_warning("robustness: skipping version check, continuing to kallsyms\n");
+    goto kallsyms_lookup;
   }
 
   char version_buf[256];
@@ -121,8 +121,7 @@ int robustness_check_phase1(robustness_result_t *result) {
   close(fd);
   if (n <= 0) {
     pr_warning("robustness: cannot read /proc/version\n");
-    result->overall_pass = 1;
-    return 0;
+    goto kallsyms_lookup;
   }
   version_buf[n] = '\0';
 
@@ -130,8 +129,7 @@ int robustness_check_phase1(robustness_result_t *result) {
   if (!parse_kernel_version(version_buf, result->detected_version,
                             sizeof(result->detected_version))) {
     pr_warning("robustness: cannot parse kernel version\n");
-    result->overall_pass = 1;
-    return 0;
+    goto kallsyms_lookup;
   }
 
   pr_info("robustness: detected kernel %s, expected %s\n",
@@ -163,7 +161,8 @@ int robustness_check_phase1(robustness_result_t *result) {
     return -1;
   }
 
-  /* 尝试 /proc/kallsyms 动态查找 */
+kallsyms_lookup:
+  /* 尝试 /proc/kallsyms 动态查找 (即使 /proc/version 不可读也执行) */
   pr_info("robustness: trying /proc/kallsyms dynamic lookup...\n");
 
   result->dyn_kallsyms_lookup_name = kallsyms_resolve("kallsyms_lookup_name");
