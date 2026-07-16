@@ -31,6 +31,25 @@ typedef struct {
   uint64_t dyn_empty_zero_page;
   uint64_t dyn_nfulnl_logger;
   uint64_t dyn_loggers;
+
+  /* KASLR base (通过 _stext 或 __init_begin 查找) */
+  uint64_t dyn_stext;
+
+  /* task_group 及其他符号 */
+  uint64_t dyn_root_task_group;
+  uint64_t dyn_selinux_enforcing;
+
+  /* fops 函数指针 (用于 put_fake_fops_table) */
+  uint64_t dyn_ashmem_ioctl;
+  uint64_t dyn_ashmem_compat_ioctl;
+  uint64_t dyn_ashmem_mmap;
+  uint64_t dyn_ashmem_open;
+  uint64_t dyn_ashmem_release;
+  uint64_t dyn_ashmem_show_fdinfo;
+  uint64_t dyn_configfs_read_iter;
+  uint64_t dyn_configfs_bin_write_iter;
+  uint64_t dyn_copy_splice_read;
+  uint64_t dyn_noop_llseek;
 } robustness_result_t;
 
 /*

