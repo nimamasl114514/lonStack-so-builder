@@ -261,7 +261,7 @@ struct kernelsnitch_shared_state *kernelsnitch_setup(size_t __mm_struct_sz, size
     ks->mm_struct = -1;
     ks->mm_struct_sz = __mm_struct_sz;
     ks->mm_slab_order = __mm_slab_order;
-    ks->cpu_cnt = sysconf(_SC_NPROCESSORS_ONLN)*2;
+    ks->cpu_cnt = sysconf(_SC_NPROCESSORS_CONF)*2;
     ks->thread_cnt = __thread_cnt;
     ks->collisions = __collision_cnt;
     ks->verbose = __verbose;
@@ -446,5 +446,5 @@ void kernelsnitch_print_collisions(struct kernelsnitch_shared_state *ks)
  */
 size_t kernelsnitch(size_t __mm_struct_sz, size_t __mm_slab_order)
 {
-    return kernelsnitch_param(__mm_struct_sz, __mm_slab_order, sysconf(_SC_NPROCESSORS_ONLN)*2, 16, 0, 0);
+    return kernelsnitch_param(__mm_struct_sz, __mm_slab_order, sysconf(_SC_NPROCESSORS_CONF)*2, 16, 0, 0);
 }

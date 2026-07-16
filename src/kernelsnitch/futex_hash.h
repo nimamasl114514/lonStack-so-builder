@@ -202,7 +202,32 @@ uint32_t __futex_hash(futex_key_t *key, uint32_t futex_hashsize)
 unsigned long futex_hashsize = (unsigned long)-1;
 void futex_init(void)
 {
-    futex_hashsize = SYSCHK(sysconf(_SC_NPROCESSORS_ONLN) * 256);
+    // Kernel uses roundup_pow_of_two(256 * num_possible_cpus())
+    // sysconf(_SC_NPROCESSORS_ONLN) returns online CPUs, not possible CPUs
+    // Android frequently offlines big cores -> online < possible -> hashsize mismatch
+    int possible_cpus = 0;
+    int fd = open("/sys/devices/system/cpu/possible", O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) {
+        char buf[64];
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+        if (n > 0) {
+            buf[n] = 0;
+            int start, end;
+            if (sscanf(buf, "%d-%d", &start, &end) == 2)
+                possible_cpus = end - start + 1;
+            else
+                possible_cpus = atoi(buf);
+        }
+    }
+    if (possible_cpus <= 0)
+        possible_cpus = (int)sysconf(_SC_NPROCESSORS_CONF);
+    if (possible_cpus <= 0)
+        possible_cpus = 8; // MT6877 Dimensity 900 fallback
+    unsigned long raw = (unsigned long)possible_cpus * 256;
+    futex_hashsize = 1;
+    while (futex_hashsize < raw)
+        futex_hashsize <<= 1;
 }
 uint32_t futex_hash(size_t addr, size_t mm)
 {
