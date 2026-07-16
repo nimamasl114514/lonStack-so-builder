@@ -35,23 +35,24 @@ jobs:
       with:
         python-version: '3.11'
         cache: 'pip'
+        cache-dependency-path: 'requirements.txt'
     
     - name: 安装Python依赖库
       run: |
         pip3 install --upgrade pip
-        pip3 install vmlinux-to-elf
+        pip3 install -r requirements.txt
     
     - name: 生成target.h
       run: |
         python3 auto_extract_offsets.py boot.img 
-        
+    
     - name: 移动target.h
       run: |
-        TARGET_FILE=$(find . -name "target.h" -type f | head -1)	    
+        TARGET_FILE=$(find . -name "target.h" -type f | head -1)
         if [ -z "$TARGET_FILE" ]; then
           echo "Error: target.h not found"
           exit 1
-        fi	    
+        fi
         echo "Found target.h at: $TARGET_FILE"
         mv "$TARGET_FILE" src/targets/myProject/target.h
         ls -la src/targets/myProject/target.h
