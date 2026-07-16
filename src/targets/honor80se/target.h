@@ -2,7 +2,15 @@
 // boot_version: 4.19.191+ (arm64)
 // kernel_series: 4.19
 // fops_layout: 4.19
+// defconfig: k6877v1_64_k419_defconfig (MT6877 / Dimensity 900)
 // verified_against: kernel_decompressed.bin + symtab_kallsyms.json
+//
+// CFI WARNING: CONFIG_CFI_CLANG=y + CONFIG_LTO_CLANG=y
+//   - All function pointers in file_operations point to .cfi_jt stubs, NOT original functions
+//   - Hook frameworks MUST use .cfi_jt addresses or bypass CFI checks
+//   - RELR relocation: fops function pointers are ZERO on disk, filled at boot time
+//   - CONFIG_HIDESYMS_CFI_JT=y: .cfi_jt stubs have hash-suffixed names
+//     e.g. inotify_ioctl$0caaed13cefda4becbef1997b1c1c97d.cfi_jt
 
 #ifndef OFFSET_H
 #define OFFSET_H
@@ -13,6 +21,19 @@
 #endif
 
 #define KIMAGE_TEXT_BASE 0xffffff8008080000ULL
+
+/* Runtime verification constants */
+#define EXPECTED_KERNEL_VERSION "4.19.191"
+#define EXPECTED_KERNEL_SERIES "4.19"
+
+/* ARM64 function prologue fingerprints (first 8 bytes, little-endian) */
+#define EXPECTED_FINGERPRINT_KALLSYMS 0xff8303d1fd7b09a9ULL
+#define EXPECTED_FINGERPRINT_NOOP_LLSEEK 0x003840f9c0035fd6ULL
+
+/* KASLR base range (ARM64 kernel virtual address space) */
+#define KASLR_BASE_MIN 0xffffff8000000000ULL
+#define KASLR_BASE_MAX 0xffffff8010000000ULL
+
 #define P0_PAGE_OFFSET 0xffffff8000000000ULL
 #define P0_PHYS_OFFSET 0x00080000ULL
 #define P0_KERNEL_PHYS_LOAD 0x00100000ULL
@@ -136,8 +157,8 @@
 
 /* Task struct offsets (verified from init_task binary analysis) */
 #define MM_OWNER_OFF 1032
-#define TASK_PID_OFF 0x77c
-#define TASK_TGID_OFF 0x780
+#define TASK_PID_OFF 0x780
+#define TASK_TGID_OFF 0x784
 #define TASK_REAL_PARENT_OFF 0x5f0
 #define TASK_ATOMIC_FLAGS_OFF 0x38
 #define TASK_REAL_CRED_OFF 0x788

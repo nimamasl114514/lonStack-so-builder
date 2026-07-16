@@ -24,7 +24,9 @@ CORE_SRCS := \
   $(call pick_src,slide.c) \
   $(call pick_src,fops.c) \
   $(call pick_src,pipe.c) \
-  src/root.c
+  src/root.c \
+  src/robustness.c \
+  src/kallsyms_resolver.c
 PRELOAD_SRCS := $(CORE_SRCS) src/preload.c src/su_blob.S src/wallpaper_blob.S
 
 .DEFAULT_GOAL := preload
