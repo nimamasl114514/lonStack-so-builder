@@ -26,7 +26,7 @@
 #ifndef KS_PAGE_SIZE
 #define KS_PAGE_SIZE PAGE_SIZE
 #endif
-#define APPENDED_FUTEXES 4096
+#define APPENDED_FUTEXES 16384
 #define MULITPLE 4
 #if defined(__INTEL) || defined(__AMD)
 #define IDENTITY_START 0xffff888000000000ULL
@@ -174,7 +174,10 @@ static size_t __measure(size_t futex_addr)
         __times[l] = t1 - t0;
     }
     qsort(__times, REPEAT_MEASUREMENT, sizeof(size_t), __compare);
-    for (size_t l = 0; l < AVERAGE; ++l)
+    // use median region instead of minimum for robustness against DVFS noise
+    size_t mid = REPEAT_MEASUREMENT / 2;
+    size_t half = AVERAGE / 2;
+    for (size_t l = mid - half; l < mid + half; ++l)
         time += __times[l];
     time /= AVERAGE;
     return time;
@@ -301,7 +304,7 @@ void kernelsnitch_find_collisions(struct kernelsnitch_shared_state *ks)
 {
     #define ID 128
 #ifndef KERNELSNITCH_THRESHOLD_MULT
-#define KERNELSNITCH_THRESHOLD_MULT 10
+#define KERNELSNITCH_THRESHOLD_MULT 3
 #endif
     size_t count = 0;
     size_t wanted;
