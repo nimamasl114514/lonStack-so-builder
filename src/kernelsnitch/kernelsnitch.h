@@ -384,17 +384,18 @@ void kernelsnitch_bruteforce(struct kernelsnitch_shared_state *ks)
  */
 size_t kernelsnitch_cleanup(struct kernelsnitch_shared_state *ks)
 {
-    ASSERT_pr((ks->state == KERNELSNITCH_MM_FOUND || ks->state == KERNELSNITCH_MM_NOT_FOUND), "wrong state\n");
-    munmap((void *)ks->times, sizeof(size_t)*ks->total_futexes);
-    ks->times = 0;
-    munmap((void *)ks->tids, sizeof(pthread_t)*ks->thread_cnt);
-    ks->tids = 0;
-    munmap((void *)ks->futex_addrs, sizeof(size_t)*(ks->collisions + 1));
-    ks->futex_addrs = 0;
-    munmap((void *)ks->futexes, FUTEX_SZ);
-    ks->futexes = 0;
+    /* cleanup 对任何状态都安全（只做 munmap），放宽 assert 允许 collision finding
+       失败时也调用，只打印 warning 不阻塞 */
+    if (ks->state != KERNELSNITCH_MM_FOUND && ks->state != KERNELSNITCH_MM_NOT_FOUND) {
+        pr_warning("kernelsnitch_cleanup: state=%d (expected MM_FOUND/MM_NOT_FOUND), munmap anyway\n",
+                   (int)ks->state);
+    }
+    if (ks->times) { munmap((void *)ks->times, sizeof(size_t)*ks->total_futexes); ks->times = 0; }
+    if (ks->tids)  { munmap((void *)ks->tids, sizeof(pthread_t)*ks->thread_cnt); ks->tids = 0; }
+    if (ks->futex_addrs) { munmap((void *)ks->futex_addrs, sizeof(size_t)*(ks->collisions + 1)); ks->futex_addrs = 0; }
+    if (ks->futexes) { munmap((void *)ks->futexes, FUTEX_SZ); ks->futexes = 0; }
     size_t ret = ks->mm_struct;
-    if (ks->verbose) pr_info("done\n");
+    if (ks->verbose) pr_info("cleanup done (state=%d)\n", (int)ks->state);
     munmap(ks, sizeof(struct kernelsnitch_shared_state));
     return ret;
 }

