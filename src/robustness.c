@@ -1,5 +1,7 @@
+#define _GNU_SOURCE
 #include "robustness.h"
 #include "offset.h"
+#include "common.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -9,9 +11,9 @@
 
 /*
  * 注意: robustness 模块不能用 pr_error (它会 exit(-1))
- * 只用 pr_info / pr_warning
+ * 只用 pr_info / pr_warning / pr_success
+ * _GNU_SOURCE 必须在第一个 include 之前定义 (cpu_set_t 需要)
  */
-#include "kernelsnitch/utils.h"
 
 /* ---- /proc/kallsyms 解析 ---- */
 

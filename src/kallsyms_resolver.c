@@ -9,6 +9,7 @@
  * 集成在 robustness.c 中, 此文件仅提供辅助函数。
  */
 
+#define _GNU_SOURCE
 #include "robustness.h"
 #include "offset.h"
 
@@ -17,7 +18,15 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-#include "kernelsnitch/utils.h"
+/* 轻量日志 (此文件不依赖 common.h) */
+#ifdef __ANDROID__
+#include <android/log.h>
+#define RB_LOG_INFO(fmt, ...)  __android_log_print(ANDROID_LOG_INFO,  "kallsyms", "[*] " fmt, ##__VA_ARGS__)
+#define RB_LOG_WARN(fmt, ...)  __android_log_print(ANDROID_LOG_WARN,  "kallsyms", "[-] " fmt, ##__VA_ARGS__)
+#else
+#define RB_LOG_INFO(fmt, ...)  printf("[*] " fmt, ##__VA_ARGS__)
+#define RB_LOG_WARN(fmt, ...)  printf("[-] " fmt, ##__VA_ARGS__)
+#endif
 
 /*
  * 检查 /proc/kallsyms 是否可读 (非零地址)
