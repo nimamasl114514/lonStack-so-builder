@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include <sys/utsname.h>
 
 /*
  * 注意: robustness 模块不能用 pr_error (它会 exit(-1))
@@ -105,6 +106,55 @@ static int get_kernel_series(const char *version, char *out, size_t len) {
   return 1;
 }
 
+/*
+ * uname 回退: /proc/version 被 SELinux 拒绝时仍拿版本字符串
+ * 返回 0=可继续, -1=系列明确不匹配应退出
+ */
+static int uname_version_fallback(robustness_result_t *result) {
+  struct utsname uts;
+  if (uname(&uts) != 0) {
+    pr_warning("robustness: uname failed errno=%d\n", errno);
+    return 0;
+  }
+  pr_info("robustness: uname release=%s version=%s machine=%s\n",
+          uts.release, uts.version, uts.machine);
+
+  /* release 形如 "4.19.191+" 或 "4.19.191-gXXXX": 取前导数字和点 */
+  size_t i = 0;
+  while (i < sizeof(result->detected_version) - 1 && uts.release[i] &&
+         (isdigit(uts.release[i]) || uts.release[i] == '.')) {
+    result->detected_version[i] = uts.release[i];
+    i++;
+  }
+  result->detected_version[i] = '\0';
+  if (!i) {
+    pr_warning("robustness: cannot parse uname release\n");
+    return 0;
+  }
+
+  char detected_series[16];
+  char expected_series[16];
+  get_kernel_series(result->detected_version, detected_series,
+                    sizeof(detected_series));
+  get_kernel_series(EXPECTED_KERNEL_VERSION, expected_series,
+                    sizeof(expected_series));
+
+  if (strcmp(result->detected_version, EXPECTED_KERNEL_VERSION) == 0) {
+    result->version_match = 1;
+    pr_success("robustness: uname kernel version matches exactly\n");
+  } else if (strcmp(detected_series, expected_series) == 0) {
+    pr_warning("robustness: uname same series %s but different patch (got %s)\n",
+               detected_series, result->detected_version);
+  } else {
+    result->overall_pass = 0;
+    pr_warning("robustness: uname kernel series mismatch! expected %s got %s\n",
+               expected_series, detected_series);
+    pr_warning("robustness: aborting - offsets will not work\n");
+    return -1;
+  }
+  return 0;
+}
+
 int robustness_check_phase1(robustness_result_t *result) {
   memset(result, 0, sizeof(*result));
 
@@ -113,6 +163,9 @@ int robustness_check_phase1(robustness_result_t *result) {
   if (fd < 0) {
     pr_warning("robustness: cannot open /proc/version (SELinux?)\n");
     pr_warning("robustness: skipping version check, continuing to kallsyms\n");
+    if (uname_version_fallback(result) != 0) {
+      return -1;
+    }
     goto kallsyms_lookup;
   }
 
@@ -371,4 +424,159 @@ int robustness_check_phase2(
 
 const char *robustness_expected_version(void) {
   return EXPECTED_KERNEL_VERSION;
+}
+
+/* ---- fops 半原语指纹闸门 (pipe physrw 之前的只读校验) ---- */
+
+int g_offset_drift;
+char g_offset_drift_item[96];
+
+static void drift_record(const char *item) {
+  if (!g_offset_drift) {
+    g_offset_drift = 1;
+    snprintf(g_offset_drift_item, sizeof(g_offset_drift_item), "%s", item);
+  }
+}
+
+/* 读 8 字节; 返回 1=成功 */
+static int gate_read64(int fd, uintptr_t addr, uint64_t *out) {
+  *out = 0;
+  return configfs_read_once(fd, addr, out, sizeof(*out)) ==
+         (ssize_t)sizeof(*out);
+}
+
+/* 读 4 字节; 返回 1=成功 */
+static int gate_read32(int fd, uintptr_t addr, uint32_t *out) {
+  *out = 0;
+  return configfs_read_once(fd, addr, out, sizeof(*out)) ==
+         (ssize_t)sizeof(*out);
+}
+
+/*
+ * 只读偏移指纹闸门
+ * 在 try_cfi_stage 内 fops 劫持验证之后、install_pipe_physrw 之前调用
+ * 地址一律用 data_addr() 物理别名 (与 KASLR 无关), 直接验证二进制内偏移
+ * 返回 1=全部通过, 0=存在漂移 (首个失败项记录在 g_offset_drift_item)
+ */
+int robustness_check_fops(int fd) {
+  int fails = 0;
+  uint64_t v64;
+  uint32_t v32;
+
+  pr_info("robustness: fops-gate start (read-only fingerprint checks)\n");
+
+  /* 1. kallsyms_lookup_name 序言指纹 (二进制身份金丝雀) */
+  if (gate_read64(fd, data_addr(KIMAGE_TEXT_BASE + KALLSYMS_LOOKUP_NAME_OFF),
+                  &v64) &&
+      v64 == EXPECTED_FINGERPRINT_KALLSYMS) {
+    pr_success("robustness fops-gate OK kallsyms prologue\n");
+  } else {
+    pr_warning("robustness fops-gate FAIL item=KALLSYMS_LOOKUP_NAME_OFF "
+               "got=%016llx expected=%016llx\n",
+               (unsigned long long)v64,
+               (unsigned long long)EXPECTED_FINGERPRINT_KALLSYMS);
+    drift_record("KALLSYMS_LOOKUP_NAME_OFF");
+    fails++;
+  }
+
+  /* 2. noop_llseek 序言指纹 */
+  if (gate_read64(fd, data_addr(NOOP_LLSEEK), &v64) &&
+      v64 == EXPECTED_FINGERPRINT_NOOP_LLSEEK) {
+    pr_success("robustness fops-gate OK noop_llseek prologue\n");
+  } else {
+    pr_warning("robustness fops-gate FAIL item=NOOP_LLSEEK_OFF "
+               "got=%016llx expected=%016llx\n",
+               (unsigned long long)v64,
+               (unsigned long long)EXPECTED_FINGERPRINT_NOOP_LLSEEK);
+    drift_record("NOOP_LLSEEK_OFF");
+    fails++;
+  }
+
+  /* 3. init_task 活体: pid/tgid/comm/cred */
+  {
+    uintptr_t it = data_addr(INIT_TASK);
+    uint32_t pid = 0;
+    uint32_t tgid = 0;
+    uint64_t comm = 0;
+    uint64_t cred = 0;
+    int ok = 1;
+
+    if (!gate_read32(fd, it + TASK_PID_OFF, &pid) || pid != 0) {
+      ok = 0;
+    }
+    if (!gate_read32(fd, it + TASK_TGID_OFF, &tgid) || tgid != 0) {
+      ok = 0;
+    }
+    /* "swapper\0" = 0x0072657070617773 (little-endian, 掩码7字节) */
+    if (!gate_read64(fd, it + TASK_COMM_OFF, &comm) ||
+        (comm & 0xFFFFFFFFFFFFFFULL) != 0x0072657070617773ULL) {
+      ok = 0;
+    }
+    if (!gate_read64(fd, it + TASK_CRED_OFF, &cred) ||
+        !is_kernel_ptr(cred)) {
+      ok = 0;
+    }
+
+    if (ok) {
+      pr_success("robustness fops-gate OK init_task liveness\n");
+    } else {
+      pr_warning("robustness fops-gate FAIL item=INIT_TASK_OFF "
+                 "pid=%u tgid=%u comm=%016llx cred=%016llx\n",
+                 pid, tgid, (unsigned long long)comm,
+                 (unsigned long long)cred);
+      drift_record("INIT_TASK_OFF");
+      fails++;
+    }
+  }
+
+  /* 4. anon_pipe_buf_ops 首成员为函数指针 (pipe 阶段关键) */
+  if (gate_read64(fd, data_addr(ANON_PIPE_BUF_OPS), &v64) &&
+      is_kernel_ptr(v64)) {
+    pr_success("robustness fops-gate OK anon_pipe_buf_ops\n");
+  } else {
+    pr_warning("robustness fops-gate FAIL item=ANON_PIPE_BUF_OPS_OFF "
+               "got=%016llx\n", (unsigned long long)v64);
+    drift_record("ANON_PIPE_BUF_OPS_OFF");
+    fails++;
+  }
+
+  /* 5. kmalloc_caches 首成员为 kmem_cache 指针 (pipe 阶段关键) */
+  if (gate_read64(fd, data_addr(KMALLOC_CACHES), &v64) &&
+      is_kernel_ptr(v64)) {
+    pr_success("robustness fops-gate OK kmalloc_caches\n");
+  } else {
+    pr_warning("robustness fops-gate FAIL item=KMALLOC_CACHES_OFF "
+               "got=%016llx\n", (unsigned long long)v64);
+    drift_record("KMALLOC_CACHES_OFF");
+    fails++;
+  }
+
+  /* 6. selinux_enforcing 取值只能是 0/1 */
+  if (gate_read32(fd, data_addr(SELINUX_ENFORCING), &v32) && v32 <= 1) {
+    pr_success("robustness fops-gate OK selinux_enforcing=%u\n", v32);
+  } else {
+    pr_warning("robustness fops-gate FAIL item=SELINUX_ENFORCING_OFF "
+               "got=%08x\n", v32);
+    drift_record("SELINUX_ENFORCING_OFF");
+    fails++;
+  }
+
+  /* 7. security_hook_heads 首成员为 list_head 内核指针 */
+  if (gate_read64(fd, data_addr(SECURITY_HOOK_HEADS), &v64) &&
+      is_kernel_ptr(v64)) {
+    pr_success("robustness fops-gate OK security_hook_heads\n");
+  } else {
+    pr_warning("robustness fops-gate FAIL item=SECURITY_HOOK_HEADS_OFF "
+               "got=%016llx\n", (unsigned long long)v64);
+    drift_record("SECURITY_HOOK_HEADS_OFF");
+    fails++;
+  }
+
+  if (fails) {
+    pr_warning("robustness: fops-gate %d checks FAILED, first=%s\n",
+               fails, g_offset_drift_item);
+    return 0;
+  }
+  pr_success("robustness: fops-gate all checks passed\n");
+  return 1;
 }

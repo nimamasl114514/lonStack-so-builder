@@ -362,6 +362,13 @@ int try_cfi_stage(void) {
     goto fail;
   }
 
+  /* 只读偏移指纹闸门: pipe physrw 前最后的安全检查点 */
+  if (!robustness_check_fops(fd)) {
+    cfi_last_step = 12;
+    cfi_last_errno = 0;
+    goto fail;
+  }
+
   int installed = 0;
   pipe_stage_attempts = 0;
   for (int attempt = 0; attempt < PIPE_MAX_ATTEMPTS; attempt++) {
