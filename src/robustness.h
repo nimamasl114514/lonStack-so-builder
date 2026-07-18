@@ -79,4 +79,12 @@ const char *robustness_expected_version(void);
  */
 uint64_t kallsyms_resolve(const char *name);
 
+/*
+ * Root 写入前的最终安全闸门 (pipe physrw 已就绪)
+ * 校验所有即将被写入的内核目标地址: 可读 + 语义合理
+ * 任何一项失败都返回 0, 调用方应放弃 root 改写以避免内核 panic
+ * 失败信息记录到 g_offset_drift_item
+ */
+int robustness_pre_root_check(int fd);
+
 #endif /* ROBUSTNESS_H */

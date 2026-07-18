@@ -456,6 +456,12 @@ extern int g_offset_drift;
 extern char g_offset_drift_item[96];
 int robustness_check_fops(int fd);
 
+/* Panic-safe 闸门: root 写入前最终校验 (robustness.c)
+ * 失败返回 0, 调用方应放弃 root 改写以避免内核 panic.
+ * 失败信息记录在 g_offset_drift_item.
+ */
+int robustness_pre_root_check(int fd);
+
 void init_ctx(struct mm_ctx *ctx, size_t cnt);
 void resize_pipe_slots(int pipefd[2], size_t slots);
 void make_pipe_object(int pipefd[2]);

